@@ -1,0 +1,152 @@
+import time
+import os
+import runpod
+from vllm import LLM, SamplingParams
+
+# =====================================================
+# Logging helper
+# =====================================================
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+# =====================================================
+# Configuration
+# =====================================================
+MODEL_DIR = os.environ.get("MODEL_DIR", "/runpod-volume/models/qwen3.5-35b-a3b")
+MODEL_REPO = os.environ.get("MODEL_REPO", "Qwen/Qwen3.5-35B-A3B")
+
+# =====================================================
+# Download model to Network Volume (first boot only)
+# =====================================================
+def ensure_model_on_volume():
+    """
+    Check if the model already exists on the RunPod Network Volume.
+    If not, download it from Hugging Face. Subsequent workers will
+    find the model already present and skip the download.
+    """
+    config_path = os.path.join(MODEL_DIR, "config.json")
+
+    if os.path.exists(config_path):
+        log(f"Model already present at {MODEL_DIR} — skipping download")
+        return MODEL_DIR
+
+    log(f"Model not found at {MODEL_DIR} — downloading {MODEL_REPO} from Hugging Face...")
+    log("This will take 10-20 minutes on first boot (model is ~70 GB)")
+
+    from huggingface_hub import snapshot_download
+
+    snapshot_download(
+        repo_id=MODEL_REPO,
+        local_dir=MODEL_DIR,
+        # Use HF_TOKEN env var automatically if set (for gated models)
+    )
+
+    log(f"Download complete — model saved to {MODEL_DIR}")
+    return MODEL_DIR
+
+# =====================================================
+# Ensure model is available
+# =====================================================
+model_path = ensure_model_on_volume()
+
+# =====================================================
+# Initialize vLLM engine (runs once at startup)
+# =====================================================
+log("Initializing vLLM engine...")
+start = time.time()
+
+llm = LLM(
+    model=model_path,
+    trust_remote_code=True,
+    dtype="bfloat16",
+    max_model_len=16384,
+    max_num_seqs=8,
+    gpu_memory_utilization=0.85,
+    enforce_eager=True,
+)
+
+log(f"vLLM engine ready in {time.time() - start:.1f}s")
+
+# =====================================================
+# RunPod handler
+# =====================================================
+def handler(event):
+    log("Handler started")
+
+    input_data = event["input"]
+    
+    # Extract inputs
+    system_prompt = input_data.get("system_prompt")
+    user_prompt = input_data.get("user_prompt")
+    temperature = input_data.get("temperature", 0.7)
+    top_p = input_data.get("top_p", 0.9)
+    max_new_tokens = input_data.get("max_new_tokens", 1024)
+    
+    if not user_prompt:
+        log("Error: user_prompt is required")
+        return {"error": "user_prompt is required"}
+
+    log(f"Incoming Request - System Prompt: {system_prompt}")
+    log(f"Incoming Request - User Prompt: {user_prompt}")
+
+    log("Starting text generation...")
+    start_time = time.time()
+    
+    is_list = isinstance(user_prompt, list)
+    prompts_to_process = user_prompt if is_list else [user_prompt]
+    
+    # Build chat prompts using the tokenizer's chat template
+    tokenizer = llm.get_tokenizer()
+    formatted_prompts = []
+    
+    for q in prompts_to_process:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": q})
+        
+        formatted = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        formatted_prompts.append(formatted)
+    
+    # Set sampling parameters
+    sampling_params = SamplingParams(
+        temperature=temperature if temperature and temperature > 0.0 else 0.0,
+        top_p=top_p if top_p else 1.0,
+        max_tokens=max_new_tokens,
+    )
+    
+    try:
+        # Generate all prompts in a single batch (much faster than sequential)
+        outputs = llm.generate(formatted_prompts, sampling_params)
+        
+        response_data = []
+        for idx, output in enumerate(outputs):
+            text = output.outputs[0].text
+            response_data.append(text)
+            
+            prompt_tokens = len(output.prompt_token_ids)
+            completion_tokens = len(output.outputs[0].token_ids)
+            finish_reason = output.outputs[0].finish_reason
+            log(f"vLLM State (Req {idx}) - Prompt Tokens: {prompt_tokens}, Completion Tokens: {completion_tokens}, Finish Reason: {finish_reason}")
+        
+    except Exception as e:
+        err_msg = f"Generation failed: {str(e)}"
+        log(err_msg)
+        return {"error": err_msg}
+
+    log(f"Text generation completed in {time.time() - start_time:.4f}s")
+    
+    if not is_list:
+        response_data = response_data[0]
+        log(f"Generated Response: {response_data}")
+        return {"response": response_data}
+    else:
+        log(f"Generated Responses: {response_data}")
+        return {"response": response_data}
+
+# =====================================================
+# Start RunPod serverless
+# =====================================================
+runpod.serverless.start({"handler": handler})
