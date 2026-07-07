@@ -1,13 +1,43 @@
 import time
 import os
-import runpod
-from vllm import LLM, SamplingParams
+import sys
+import traceback
 
 # =====================================================
-# Logging helper
+# Early logging — runs BEFORE any heavy imports
 # =====================================================
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+log("="*60)
+log("Worker starting up...")
+log(f"Python version: {sys.version}")
+log(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')}")
+log(f"NVIDIA_VISIBLE_DEVICES: {os.environ.get('NVIDIA_VISIBLE_DEVICES', 'not set')}")
+log(f"Network volume exists: {os.path.exists('/runpod-volume')}")
+log(f"Network volume contents: {os.listdir('/runpod-volume') if os.path.exists('/runpod-volume') else 'N/A'}")
+log("="*60)
+
+# =====================================================
+# Import heavy deps with error catching
+# =====================================================
+try:
+    log("Importing runpod...")
+    import runpod
+    log("runpod imported OK")
+except Exception as e:
+    log(f"FATAL: Failed to import runpod: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    log("Importing vllm...")
+    from vllm import LLM, SamplingParams
+    log("vllm imported OK")
+except Exception as e:
+    log(f"FATAL: Failed to import vllm: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 # =====================================================
 # Configuration
@@ -24,6 +54,13 @@ def ensure_model_on_volume():
     If not, download it from Hugging Face. Subsequent workers will
     find the model already present and skip the download.
     """
+    # Verify the network volume is mounted
+    if not os.path.exists("/runpod-volume"):
+        log("ERROR: /runpod-volume does not exist!")
+        log("Make sure you attached a Network Volume to this endpoint in RunPod console.")
+        log("Go to: Serverless → Your Endpoint → Edit → Advanced → Network Volumes")
+        sys.exit(1)
+
     config_path = os.path.join(MODEL_DIR, "config.json")
 
     if os.path.exists(config_path):
@@ -32,6 +69,9 @@ def ensure_model_on_volume():
 
     log(f"Model not found at {MODEL_DIR} — downloading {MODEL_REPO} from Hugging Face...")
     log("This will take 10-20 minutes on first boot (model is ~70 GB)")
+
+    # Create the directory if it doesn't exist
+    os.makedirs(MODEL_DIR, exist_ok=True)
 
     from huggingface_hub import snapshot_download
 
@@ -47,7 +87,12 @@ def ensure_model_on_volume():
 # =====================================================
 # Ensure model is available
 # =====================================================
-model_path = ensure_model_on_volume()
+try:
+    model_path = ensure_model_on_volume()
+except Exception as e:
+    log(f"FATAL: Failed to ensure model on volume: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 # =====================================================
 # Initialize vLLM engine (runs once at startup)
@@ -55,17 +100,21 @@ model_path = ensure_model_on_volume()
 log("Initializing vLLM engine...")
 start = time.time()
 
-llm = LLM(
-    model=model_path,
-    trust_remote_code=True,
-    dtype="bfloat16",
-    max_model_len=16384,
-    max_num_seqs=8,
-    gpu_memory_utilization=0.85,
-    enforce_eager=True,
-)
-
-log(f"vLLM engine ready in {time.time() - start:.1f}s")
+try:
+    llm = LLM(
+        model=model_path,
+        trust_remote_code=True,
+        dtype="bfloat16",
+        max_model_len=16384,
+        max_num_seqs=8,
+        gpu_memory_utilization=0.85,
+        enforce_eager=True,
+    )
+    log(f"vLLM engine ready in {time.time() - start:.1f}s")
+except Exception as e:
+    log(f"FATAL: Failed to initialize vLLM engine: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 # =====================================================
 # RunPod handler
