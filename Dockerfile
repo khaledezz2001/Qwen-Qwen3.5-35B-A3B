@@ -12,9 +12,13 @@ RUN pip install --no-cache-dir vllm runpod>=1.6.2 huggingface_hub>=0.24.0
 ENV MODEL_DIR=/runpod-volume/models/qwen3.5-35b-a3b
 ENV MODEL_REPO=Qwen/Qwen3.5-35B-A3B
 
-# HF cache points to network volume so downloads persist across workers
 ENV HF_HOME=/runpod-volume/hf-cache
 ENV HF_HUB_CACHE=/runpod-volume/hf-cache
+
+# Fix: vLLM v0.24.0 forks EngineCore subprocess — must use 'spawn' to avoid CUDA re-init crash
+ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
+# Delay CUDA initialization to prevent conflicts with forked processes
+ENV CUDA_MODULE_LOADING=LAZY
 
 WORKDIR /app
 COPY handler.py /app/handler.py

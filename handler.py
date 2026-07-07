@@ -2,11 +2,11 @@ import time
 import os
 import sys
 import traceback
-import multiprocessing
 
-# Must be set before any CUDA/torch imports — vLLM v0.24.0 forks
-# an EngineCore subprocess, which fails with 'fork' (the Linux default)
-multiprocessing.set_start_method("spawn", force=True)
+# Must be set BEFORE importing vllm — vLLM v0.24.0 reads these env vars
+# to decide how to spawn its EngineCore subprocess
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
 
 # =====================================================
 # Early logging — runs BEFORE any heavy imports
