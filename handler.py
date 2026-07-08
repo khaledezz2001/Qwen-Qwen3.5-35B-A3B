@@ -9,40 +9,10 @@ os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
 
 # =====================================================
-# Early logging — runs BEFORE any heavy imports
+# Logging helper
 # =====================================================
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
-
-log("="*60)
-log("Worker starting up...")
-log(f"Python version: {sys.version}")
-log(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')}")
-log(f"NVIDIA_VISIBLE_DEVICES: {os.environ.get('NVIDIA_VISIBLE_DEVICES', 'not set')}")
-log(f"Network volume exists: {os.path.exists('/runpod-volume')}")
-log(f"Network volume contents: {os.listdir('/runpod-volume') if os.path.exists('/runpod-volume') else 'N/A'}")
-log("="*60)
-
-# =====================================================
-# Import heavy deps with error catching
-# =====================================================
-try:
-    log("Importing runpod...")
-    import runpod
-    log("runpod imported OK")
-except Exception as e:
-    log(f"FATAL: Failed to import runpod: {e}")
-    traceback.print_exc()
-    sys.exit(1)
-
-try:
-    log("Importing vllm...")
-    from vllm import LLM, SamplingParams
-    log("vllm imported OK")
-except Exception as e:
-    log(f"FATAL: Failed to import vllm: {e}")
-    traceback.print_exc()
-    sys.exit(1)
 
 # =====================================================
 # Configuration
@@ -59,7 +29,6 @@ def ensure_model_on_volume():
     If not, download it from Hugging Face. Subsequent workers will
     find the model already present and skip the download.
     """
-    # Verify the network volume is mounted
     if not os.path.exists("/runpod-volume"):
         log("ERROR: /runpod-volume does not exist!")
         log("Make sure you attached a Network Volume to this endpoint in RunPod console.")
@@ -75,7 +44,6 @@ def ensure_model_on_volume():
     log(f"Model not found at {MODEL_DIR} — downloading {MODEL_REPO} from Hugging Face...")
     log("This will take 10-20 minutes on first boot (model is ~70 GB)")
 
-    # Create the directory if it doesn't exist
     os.makedirs(MODEL_DIR, exist_ok=True)
 
     from huggingface_hub import snapshot_download
@@ -83,53 +51,19 @@ def ensure_model_on_volume():
     snapshot_download(
         repo_id=MODEL_REPO,
         local_dir=MODEL_DIR,
-        # Use HF_TOKEN env var automatically if set (for gated models)
     )
 
     log(f"Download complete — model saved to {MODEL_DIR}")
     return MODEL_DIR
 
 # =====================================================
-# Ensure model is available
-# =====================================================
-try:
-    model_path = ensure_model_on_volume()
-except Exception as e:
-    log(f"FATAL: Failed to ensure model on volume: {e}")
-    traceback.print_exc()
-    sys.exit(1)
-
-# =====================================================
-# Initialize vLLM engine (runs once at startup)
-# =====================================================
-log("Initializing vLLM engine...")
-start = time.time()
-
-try:
-    llm = LLM(
-        model=model_path,
-        trust_remote_code=True,
-        dtype="bfloat16",
-        max_model_len=16384,
-        max_num_seqs=8,
-        gpu_memory_utilization=0.85,
-        enforce_eager=True,
-    )
-    log(f"vLLM engine ready in {time.time() - start:.1f}s")
-except Exception as e:
-    log(f"FATAL: Failed to initialize vLLM engine: {e}")
-    traceback.print_exc()
-    sys.exit(1)
-
-# =====================================================
-# RunPod handler
+# RunPod handler (defined at module level, uses global `llm`)
 # =====================================================
 def handler(event):
     log("Handler started")
 
     input_data = event["input"]
     
-    # Extract inputs
     system_prompt = input_data.get("system_prompt")
     user_prompt = input_data.get("user_prompt")
     temperature = input_data.get("temperature", 0.7)
@@ -149,7 +83,6 @@ def handler(event):
     is_list = isinstance(user_prompt, list)
     prompts_to_process = user_prompt if is_list else [user_prompt]
     
-    # Build chat prompts using the tokenizer's chat template
     tokenizer = llm.get_tokenizer()
     formatted_prompts = []
     
@@ -164,7 +97,6 @@ def handler(event):
         )
         formatted_prompts.append(formatted)
     
-    # Set sampling parameters
     sampling_params = SamplingParams(
         temperature=temperature if temperature and temperature > 0.0 else 0.0,
         top_p=top_p if top_p else 1.0,
@@ -172,7 +104,6 @@ def handler(event):
     )
     
     try:
-        # Generate all prompts in a single batch (much faster than sequential)
         outputs = llm.generate(formatted_prompts, sampling_params)
         
         response_data = []
@@ -201,6 +132,67 @@ def handler(event):
         return {"response": response_data}
 
 # =====================================================
-# Start RunPod serverless
+# Main entry point — guarded for multiprocessing spawn safety
 # =====================================================
-runpod.serverless.start({"handler": handler})
+# When vLLM uses 'spawn', it re-imports this module in the child process.
+# Without this guard, all initialization code would run again in the child,
+# causing the "bootstrapping phase" crash.
+if __name__ == '__main__':
+    log("="*60)
+    log("Worker starting up...")
+    log(f"Python version: {sys.version}")
+    log(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')}")
+    log(f"NVIDIA_VISIBLE_DEVICES: {os.environ.get('NVIDIA_VISIBLE_DEVICES', 'not set')}")
+    log(f"Network volume exists: {os.path.exists('/runpod-volume')}")
+    log(f"Network volume contents: {os.listdir('/runpod-volume') if os.path.exists('/runpod-volume') else 'N/A'}")
+    log("="*60)
+
+    # Import heavy deps
+    try:
+        log("Importing runpod...")
+        import runpod
+        log("runpod imported OK")
+    except Exception as e:
+        log(f"FATAL: Failed to import runpod: {e}")
+        traceback.print_exc()
+        sys.exit(1)
+
+    try:
+        log("Importing vllm...")
+        from vllm import LLM, SamplingParams
+        log("vllm imported OK")
+    except Exception as e:
+        log(f"FATAL: Failed to import vllm: {e}")
+        traceback.print_exc()
+        sys.exit(1)
+
+    # Ensure model is on volume
+    try:
+        model_path = ensure_model_on_volume()
+    except Exception as e:
+        log(f"FATAL: Failed to ensure model on volume: {e}")
+        traceback.print_exc()
+        sys.exit(1)
+
+    # Initialize vLLM engine
+    log("Initializing vLLM engine...")
+    start = time.time()
+
+    try:
+        llm = LLM(
+            model=model_path,
+            trust_remote_code=True,
+            dtype="bfloat16",
+            max_model_len=16384,
+            max_num_seqs=8,
+            gpu_memory_utilization=0.85,
+            enforce_eager=True,
+        )
+        log(f"vLLM engine ready in {time.time() - start:.1f}s")
+    except Exception as e:
+        log(f"FATAL: Failed to initialize vLLM engine: {e}")
+        traceback.print_exc()
+        sys.exit(1)
+
+    # Start RunPod serverless
+    runpod.serverless.start({"handler": handler})
