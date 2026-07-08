@@ -4,7 +4,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install dependencies — latest vLLM for Qwen3.5 MoE support
+# Step 1: Install PyTorch compiled for CUDA 12.4 (must match the base image's CUDA version)
+# Without this, vllm pulls PyTorch for CUDA 12.8 which crashes with "driver too old"
+RUN pip install --no-cache-dir torch==2.6.0+cu124 torchvision==0.21.0+cu124 \
+    --extra-index-url https://download.pytorch.org/whl/cu124
+
+# Step 2: Install vllm (will use the PyTorch we just installed instead of pulling its own)
 RUN pip install --no-cache-dir vllm runpod>=1.6.2 huggingface_hub>=0.24.0
 
 # Model will be downloaded to RunPod Network Volume on first boot
