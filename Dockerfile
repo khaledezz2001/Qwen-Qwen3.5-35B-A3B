@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1
 
 # Install additional runpod serverless dependencies and the latest transformers to support glm4_moe_lite
 RUN pip install --no-cache-dir runpod>=1.6.2 huggingface_hub>=0.24.0 && \
-    pip install --no-cache-dir git+https://github.com/huggingface/transformers.git
+    pip install --no-cache-dir https://github.com/huggingface/transformers/archive/refs/heads/main.zip
 
 # Model will be downloaded to RunPod Network Volume on first boot
 ENV MODEL_DIR=/runpod-volume/models/glm-4.7-flash
