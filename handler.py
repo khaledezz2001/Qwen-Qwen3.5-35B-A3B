@@ -149,6 +149,20 @@ if __name__ == '__main__':
     log(f"Network volume contents: {os.listdir('/runpod-volume') if os.path.exists('/runpod-volume') else 'N/A'}")
     log("="*60)
 
+    # Diagnostic import of torch to see what PyTorch version/CUDA version is loaded
+    try:
+        import torch
+        log(f"PyTorch version: {torch.__version__}")
+        log(f"PyTorch compiled with CUDA: {torch.version.cuda}")
+        log(f"PyTorch believes CUDA is available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            log(f"PyTorch detected GPU device name: {torch.cuda.get_device_name(0)}")
+            log(f"PyTorch detected device count: {torch.cuda.device_count()}")
+            log(f"PyTorch detected driver version (internal): {torch.cuda.get_device_capability(0)}")
+    except Exception as e:
+        log(f"Failed to run diagnostic torch import: {e}")
+
+
     # Import heavy deps
     try:
         log("Importing runpod...")
