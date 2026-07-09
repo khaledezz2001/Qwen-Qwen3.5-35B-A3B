@@ -59,7 +59,7 @@ def ensure_model_on_volume():
     return MODEL_DIR
 
 # =====================================================
-# RunPod handler (defined at module level, uses global `llm`)
+# RunePod handler (defined at module level, uses global `llm`)
 # =====================================================
 def handler(event):
     log("Handler started")

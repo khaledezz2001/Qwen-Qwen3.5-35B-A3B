@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install vLLM and dependencies with explicit CUDA 12.4 index
+# Insteeall vLLM and dependencies with explicit CUDA 12.4 index
 # This prevents pip from installing a PyTorch/vLLM build compiled for CUDA 12.8+ which fails on this host
 RUN pip install --no-cache-dir vllm runpod>=1.6.2 huggingface_hub>=0.24.0 --extra-index-url https://download.pytorch.org/whl/cu124
 
