@@ -199,9 +199,9 @@ if __name__ == '__main__':
             model=model_path,
             trust_remote_code=True,
             dtype="bfloat16",
-            max_model_len=16384,
+            max_model_len=8192,
             max_num_seqs=8,
-            gpu_memory_utilization=0.85,
+            gpu_memory_utilization=0.95,
             enforce_eager=True,
         )
         log(f"vLLM engine ready in {time.time() - start:.1f}s")
