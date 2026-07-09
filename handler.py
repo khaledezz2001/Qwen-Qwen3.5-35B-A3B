@@ -7,6 +7,8 @@ import traceback
 # to decide how to spawn its EngineCore subprocess
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
+# Enable CUDA forward-compatibility layer (host driver CUDA 12.8, vLLM built for newer)
+os.environ.setdefault("VLLM_ENABLE_CUDA_COMPATIBILITY", "1")
 
 # =====================================================
 # Logging helper
