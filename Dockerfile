@@ -25,4 +25,7 @@ ENV CUDA_MODULE_LOADING=LAZY
 WORKDIR /app
 COPY handler.py /app/handler.py
 
+# Override the entrypoint of the base image so we can run our handler.py instead of the vLLM server directly
+ENTRYPOINT []
+
 CMD ["python3", "handler.py"]
