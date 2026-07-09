@@ -17,10 +17,8 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 # =====================================================
-# Configuration
-# =====================================================
-MODEL_DIR = os.environ.get("MODEL_DIR", "/runpod-volume/models/qwen3.5-35b-a3b")
-MODEL_REPO = os.environ.get("MODEL_REPO", "Qwen/Qwen3.5-35B-A3B")
+MODEL_DIR = os.environ.get("MODEL_DIR", "/runpod-volume/models/glm-4.7-flash")
+MODEL_REPO = os.environ.get("MODEL_REPO", "zai-org/GLM-4.7-Flash")
 
 # =====================================================
 # Download model to Network Volume (first boot only)
@@ -201,7 +199,7 @@ if __name__ == '__main__':
             dtype="bfloat16",
             max_model_len=8192,
             max_num_seqs=8,
-            gpu_memory_utilization=0.95,
+            gpu_memory_utilization=0.90,
             enforce_eager=True,
         )
         log(f"vLLM engine ready in {time.time() - start:.1f}s")

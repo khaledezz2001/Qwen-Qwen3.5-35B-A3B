@@ -4,13 +4,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install additional runpod serverless dependencies (vLLM and torch are already pre-installed and matched!)
-RUN pip install --no-cache-dir runpod>=1.6.2 huggingface_hub>=0.24.0
+# Install additional runpod serverless dependencies and the latest transformers to support glm4_moe_lite
+RUN pip install --no-cache-dir runpod>=1.6.2 huggingface_hub>=0.24.0 && \
+    pip install --no-cache-dir git+https://github.com/huggingface/transformers.git
 
 # Model will be downloaded to RunPod Network Volume on first boot
-# (no longer baked into the image — too large for Qwen3.5-35B-A3B at ~70GB)
-ENV MODEL_DIR=/runpod-volume/models/qwen3.5-35b-a3b
-ENV MODEL_REPO=Qwen/Qwen3.5-35B-A3B
+ENV MODEL_DIR=/runpod-volume/models/glm-4.7-flash
+ENV MODEL_REPO=zai-org/GLM-4.7-Flash
 
 ENV HF_HOME=/runpod-volume/hf-cache
 ENV HF_HUB_CACHE=/runpod-volume/hf-cache
