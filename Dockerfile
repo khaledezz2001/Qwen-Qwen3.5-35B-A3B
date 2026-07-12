@@ -4,22 +4,19 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install additional runpod serverless dependencies and the latest transformers to support glm4_moe_lite
-RUN pip install --no-cache-dir runpod>=1.6.2 huggingface_hub>=0.24.0 && \
-    pip install --no-cache-dir https://github.com/huggingface/transformers/archive/refs/heads/main.zip
+# Install additional runpod serverless dependencies (vLLM and torch are already pre-installed and matched!)
+RUN pip install --no-cache-dir runpod>=1.6.2 huggingface_hub>=0.24.0
 
 # Model will be downloaded to RunPod Network Volume on first boot
-ENV MODEL_DIR=/runpod-volume/models/glm-4.7-flash
-ENV MODEL_REPO=zai-org/GLM-4.7-Flash
+# (no longer baked into the image — too large for Qwen3.5-35B-A3B at ~70GB)
+ENV MODEL_DIR=/runpod-volume/models/qwen3.5-35b-a3b
+ENV MODEL_REPO=Qwen/Qwen3.5-35B-A3B
 
 ENV HF_HOME=/runpod-volume/hf-cache
 ENV HF_HUB_CACHE=/runpod-volume/hf-cache
 
-# Prioritize host NVIDIA driver libraries to prevent Error 803 (driver/compat mismatch)
-ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
-# Remove container-bundled cuda-compat shims so they don't conflict with host NVIDIA drivers
-RUN rm -rf /usr/local/cuda/compat
-
+# Fix CUDA driver/toolkit version mismatch (host has CUDA 12.8, vLLM builds for newer)
+ENV VLLM_ENABLE_CUDA_COMPATIBILITY=1
 # Fix: vLLM v0.24.0 forks EngineCore subprocess — must use 'spawn' to avoid CUDA re-init crash
 ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
 # Delay CUDA initialization to prevent conflicts with forked processes

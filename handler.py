@@ -3,16 +3,12 @@ import os
 import sys
 import traceback
 
-# Ensure host NVIDIA driver libraries are prioritized over container compat shims (prevents CUDA Error 803)
-nvidia_libs = "/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu"
-current_ld = os.environ.get("LD_LIBRARY_PATH", "")
-if nvidia_libs not in current_ld:
-    os.environ["LD_LIBRARY_PATH"] = f"{nvidia_libs}:{current_ld}" if current_ld else nvidia_libs
-
 # Must be set BEFORE importing vllm — vLLM v0.24.0 reads these env vars
 # to decide how to spawn its EngineCore subprocess
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
+# Enable CUDA forward-compatibility layer (host driver CUDA 12.8, vLLM built for newer)
+os.environ.setdefault("VLLM_ENABLE_CUDA_COMPATIBILITY", "1")
 
 # =====================================================
 # Logging helper
@@ -21,8 +17,10 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 # =====================================================
-MODEL_DIR = os.environ.get("MODEL_DIR", "/runpod-volume/models/glm-4.7-flash")
-MODEL_REPO = os.environ.get("MODEL_REPO", "zai-org/GLM-4.7-Flash")
+# Configuration
+# =====================================================
+MODEL_DIR = os.environ.get("MODEL_DIR", "/runpod-volume/models/qwen3.5-35b-a3b")
+MODEL_REPO = os.environ.get("MODEL_REPO", "Qwen/Qwen3.5-35B-A3B")
 
 # =====================================================
 # Download model to Network Volume (first boot only)
@@ -203,7 +201,7 @@ if __name__ == '__main__':
             dtype="bfloat16",
             max_model_len=8192,
             max_num_seqs=8,
-            gpu_memory_utilization=0.90,
+            gpu_memory_utilization=0.95,
             enforce_eager=True,
         )
         log(f"vLLM engine ready in {time.time() - start:.1f}s")
