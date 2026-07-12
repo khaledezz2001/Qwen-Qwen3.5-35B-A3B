@@ -71,6 +71,7 @@ def handler(event):
     temperature = input_data.get("temperature", 0.7)
     top_p = input_data.get("top_p", 0.9)
     max_new_tokens = input_data.get("max_new_tokens", 1024)
+    enable_thinking = input_data.get("enable_thinking", True)
     
     if not user_prompt:
         log("Error: user_prompt is required")
@@ -78,6 +79,7 @@ def handler(event):
 
     log(f"Incoming Request - System Prompt: {system_prompt}")
     log(f"Incoming Request - User Prompt: {user_prompt}")
+    log(f"Incoming Request - Enable Thinking: {enable_thinking}")
 
     log("Starting text generation...")
     start_time = time.time()
@@ -94,9 +96,21 @@ def handler(event):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": q})
         
-        formatted = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        # Pass enable_thinking to apply_chat_template if supported (e.g. Qwen3.5 models)
+        try:
+            formatted = tokenizer.apply_chat_template(
+                messages, 
+                tokenize=False, 
+                add_generation_prompt=True,
+                enable_thinking=enable_thinking
+            )
+        except TypeError:
+            # Fallback if the template/tokenizer doesn't support the enable_thinking parameter
+            formatted = tokenizer.apply_chat_template(
+                messages, 
+                tokenize=False, 
+                add_generation_prompt=True
+            )
         formatted_prompts.append(formatted)
     
     sampling_params = SamplingParams(
@@ -109,14 +123,34 @@ def handler(event):
         outputs = llm.generate(formatted_prompts, sampling_params)
         
         response_data = []
+        thinking_data = []
         for idx, output in enumerate(outputs):
             text = output.outputs[0].text
-            response_data.append(text)
             
             prompt_tokens = len(output.prompt_token_ids)
             completion_tokens = len(output.outputs[0].token_ids)
             finish_reason = output.outputs[0].finish_reason
             log(f"vLLM State (Req {idx}) - Prompt Tokens: {prompt_tokens}, Completion Tokens: {completion_tokens}, Finish Reason: {finish_reason}")
+            
+            # Post-process to extract thinking block if present
+            thinking = None
+            if "<think>" in text:
+                if "</think>" in text:
+                    parts = text.split("</think>", 1)
+                    thinking = parts[0].replace("<think>", "").strip()
+                    text = parts[1].strip()
+                else:
+                    thinking = text.replace("<think>", "").strip()
+                    text = ""
+            elif text.strip().startswith("Thinking Process:"):
+                # Handle cases where thinking is prepended as plain text
+                parts = text.split("\n\n", 1)
+                if len(parts) > 1:
+                    thinking = parts[0].replace("Thinking Process:", "").strip()
+                    text = parts[1].strip()
+            
+            response_data.append(text)
+            thinking_data.append(thinking)
         
     except Exception as e:
         err_msg = f"Generation failed: {str(e)}"
@@ -126,12 +160,22 @@ def handler(event):
     log(f"Text generation completed in {time.time() - start_time:.4f}s")
     
     if not is_list:
-        response_data = response_data[0]
-        log(f"Generated Response: {response_data}")
-        return {"response": response_data}
+        response_text = response_data[0]
+        thinking_text = thinking_data[0]
+        log(f"Generated Response: {response_text}")
+        if thinking_text:
+            log(f"Extracted Thinking: {thinking_text}")
+            
+        result = {"response": response_text}
+        if thinking_text is not None:
+            result["thinking"] = thinking_text
+        return result
     else:
         log(f"Generated Responses: {response_data}")
-        return {"response": response_data}
+        result = {"response": response_data}
+        if any(t is not None for t in thinking_data):
+            result["thinking"] = thinking_data
+        return result
 
 # =====================================================
 # Main entry point — guarded for multiprocessing spawn safety
