@@ -15,8 +15,11 @@ ENV MODEL_REPO=zai-org/GLM-4.7-Flash
 ENV HF_HOME=/runpod-volume/hf-cache
 ENV HF_HUB_CACHE=/runpod-volume/hf-cache
 
-# Fix CUDA driver/toolkit version mismatch (host has CUDA 12.8, vLLM builds for newer)
-ENV VLLM_ENABLE_CUDA_COMPATIBILITY=1
+# Prioritize host NVIDIA driver libraries to prevent Error 803 (driver/compat mismatch)
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+# Remove container-bundled cuda-compat shims so they don't conflict with host NVIDIA drivers
+RUN rm -rf /usr/local/cuda/compat
+
 # Fix: vLLM v0.24.0 forks EngineCore subprocess — must use 'spawn' to avoid CUDA re-init crash
 ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
 # Delay CUDA initialization to prevent conflicts with forked processes

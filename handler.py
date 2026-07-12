@@ -3,12 +3,16 @@ import os
 import sys
 import traceback
 
+# Ensure host NVIDIA driver libraries are prioritized over container compat shims (prevents CUDA Error 803)
+nvidia_libs = "/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu"
+current_ld = os.environ.get("LD_LIBRARY_PATH", "")
+if nvidia_libs not in current_ld:
+    os.environ["LD_LIBRARY_PATH"] = f"{nvidia_libs}:{current_ld}" if current_ld else nvidia_libs
+
 # Must be set BEFORE importing vllm — vLLM v0.24.0 reads these env vars
 # to decide how to spawn its EngineCore subprocess
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
-# Enable CUDA forward-compatibility layer (host driver CUDA 12.8, vLLM built for newer)
-os.environ.setdefault("VLLM_ENABLE_CUDA_COMPATIBILITY", "1")
 
 # =====================================================
 # Logging helper
