@@ -15,8 +15,8 @@ ENV MODEL_REPO=Qwen/Qwen3.5-35B-A3B
 ENV HF_HOME=/runpod-volume/hf-cache
 ENV HF_HUB_CACHE=/runpod-volume/hf-cache
 
-# Fix CUDA driver/toolkit version mismatch (host has CUDA 12.8, vLLM builds for newer)
-ENV VLLM_ENABLE_CUDA_COMPATIBILITY=1
+# Fix CUDA driver/toolkit version mismatch (host has CUDA 12.8, vLLM builds for older/compatible versions)
+ENV VLLM_ENABLE_CUDA_COMPATIBILITY=0
 # Fix: vLLM v0.24.0 forks EngineCore subprocess — must use 'spawn' to avoid CUDA re-init crash
 ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
 # Delay CUDA initialization to prevent conflicts with forked processes
