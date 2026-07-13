@@ -59,7 +59,63 @@ def ensure_model_on_volume():
     return MODEL_DIR
 
 # =====================================================
-# RunePod handler (defined at module level, uses global `llm`)
+# Model management helpers and dynamic engine initialization
+# =====================================================
+llm = None
+model_path = None
+
+def get_llm():
+    global llm, model_path
+    if llm is None:
+        log("Initializing vLLM engine...")
+        start = time.time()
+        
+        if model_path is None:
+            model_path = ensure_model_on_volume()
+            
+        from vllm import LLM
+        llm = LLM(
+            model=model_path,
+            trust_remote_code=True,
+            dtype="bfloat16",
+            max_model_len=8192,
+            max_num_seqs=8,
+            gpu_memory_utilization=0.95,
+            enforce_eager=True,
+        )
+        log(f"vLLM engine ready in {time.time() - start:.1f}s")
+    return llm
+
+def clear_gpu_cache(unload_model=False):
+    global llm
+    if unload_model and llm is not None:
+        log("Unloading vLLM model engine to free GPU memory...")
+        try:
+            from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
+            destroy_model_parallel()
+        except Exception as e:
+            log(f"Error destroying model parallel state: {e}")
+        
+        try:
+            if hasattr(llm, "llm_engine"):
+                if hasattr(llm.llm_engine, "model_executor"):
+                    del llm.llm_engine.model_executor
+                del llm.llm_engine
+        except Exception as e:
+            log(f"Error deleting engine components: {e}")
+            
+        llm = None
+
+    import gc
+    import torch
+    gc.collect()
+    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.ipc_collect()
+    log("GPU memory and cache cleared.")
+
+# =====================================================
+# RunPod handler
 # =====================================================
 def handler(event):
     log("Handler started")
@@ -72,6 +128,7 @@ def handler(event):
     top_p = input_data.get("top_p", 0.9)
     max_new_tokens = input_data.get("max_new_tokens", 1024)
     enable_thinking = input_data.get("enable_thinking", True)
+    clear_cache = input_data.get("clear_cache", False)
     
     if not user_prompt:
         log("Error: user_prompt is required")
@@ -80,6 +137,7 @@ def handler(event):
     log(f"Incoming Request - System Prompt: {system_prompt}")
     log(f"Incoming Request - User Prompt: {user_prompt}")
     log(f"Incoming Request - Enable Thinking: {enable_thinking}")
+    log(f"Incoming Request - Clear Cache: {clear_cache}")
 
     log("Starting text generation...")
     start_time = time.time()
@@ -87,40 +145,43 @@ def handler(event):
     is_list = isinstance(user_prompt, list)
     prompts_to_process = user_prompt if is_list else [user_prompt]
     
-    tokenizer = llm.get_tokenizer()
-    formatted_prompts = []
-    
-    for q in prompts_to_process:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": q})
-        
-        # Pass enable_thinking to apply_chat_template if supported (e.g. Qwen3.5 models)
-        try:
-            formatted = tokenizer.apply_chat_template(
-                messages, 
-                tokenize=False, 
-                add_generation_prompt=True,
-                enable_thinking=enable_thinking
-            )
-        except TypeError:
-            # Fallback if the template/tokenizer doesn't support the enable_thinking parameter
-            formatted = tokenizer.apply_chat_template(
-                messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
-        formatted_prompts.append(formatted)
-    
-    sampling_params = SamplingParams(
-        temperature=temperature if temperature and temperature > 0.0 else 0.0,
-        top_p=top_p if top_p else 1.0,
-        max_tokens=max_new_tokens,
-    )
-    
+    result = {}
     try:
-        outputs = llm.generate(formatted_prompts, sampling_params)
+        llm_instance = get_llm()
+        tokenizer = llm_instance.get_tokenizer()
+        formatted_prompts = []
+        
+        for q in prompts_to_process:
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": q})
+            
+            # Pass enable_thinking to apply_chat_template if supported (e.g. Qwen3.5 models)
+            try:
+                formatted = tokenizer.apply_chat_template(
+                    messages, 
+                    tokenize=False, 
+                    add_generation_prompt=True,
+                    enable_thinking=enable_thinking
+                )
+            except TypeError:
+                # Fallback if the template/tokenizer doesn't support the enable_thinking parameter
+                formatted = tokenizer.apply_chat_template(
+                    messages, 
+                    tokenize=False, 
+                    add_generation_prompt=True
+                )
+            formatted_prompts.append(formatted)
+        
+        from vllm import SamplingParams
+        sampling_params = SamplingParams(
+            temperature=temperature if temperature and temperature > 0.0 else 0.0,
+            top_p=top_p if top_p else 1.0,
+            max_tokens=max_new_tokens,
+        )
+        
+        outputs = llm_instance.generate(formatted_prompts, sampling_params)
         
         response_data = []
         thinking_data = []
@@ -152,30 +213,34 @@ def handler(event):
             response_data.append(text)
             thinking_data.append(thinking)
         
+        log(f"Text generation completed in {time.time() - start_time:.4f}s")
+        
+        if not is_list:
+            response_text = response_data[0]
+            thinking_text = thinking_data[0]
+            log(f"Generated Response: {response_text}")
+            if thinking_text:
+                log(f"Extracted Thinking: {thinking_text}")
+                
+            result = {"response": response_text}
+            if thinking_text is not None:
+                result["thinking"] = thinking_text
+        else:
+            log(f"Generated Responses: {response_data}")
+            result = {"response": response_data}
+            if any(t is not None for t in thinking_data):
+                result["thinking"] = thinking_data
+                
     except Exception as e:
         err_msg = f"Generation failed: {str(e)}"
         log(err_msg)
-        return {"error": err_msg}
-
-    log(f"Text generation completed in {time.time() - start_time:.4f}s")
-    
-    if not is_list:
-        response_text = response_data[0]
-        thinking_text = thinking_data[0]
-        log(f"Generated Response: {response_text}")
-        if thinking_text:
-            log(f"Extracted Thinking: {thinking_text}")
-            
-        result = {"response": response_text}
-        if thinking_text is not None:
-            result["thinking"] = thinking_text
-        return result
-    else:
-        log(f"Generated Responses: {response_data}")
-        result = {"response": response_data}
-        if any(t is not None for t in thinking_data):
-            result["thinking"] = thinking_data
-        return result
+        result = {"error": err_msg}
+    finally:
+        # Always clean up memory and clear cache.
+        # If clear_cache is requested, fully unload the model from GPU so another model can be loaded.
+        clear_gpu_cache(unload_model=clear_cache)
+        
+    return result
 
 # =====================================================
 # Main entry point — guarded for multiprocessing spawn safety
@@ -235,20 +300,8 @@ if __name__ == '__main__':
         sys.exit(1)
 
     # Initialize vLLM engine
-    log("Initializing vLLM engine...")
-    start = time.time()
-
     try:
-        llm = LLM(
-            model=model_path,
-            trust_remote_code=True,
-            dtype="bfloat16",
-            max_model_len=8192,
-            max_num_seqs=8,
-            gpu_memory_utilization=0.95,
-            enforce_eager=True,
-        )
-        log(f"vLLM engine ready in {time.time() - start:.1f}s")
+        get_llm()
     except Exception as e:
         log(f"FATAL: Failed to initialize vLLM engine: {e}")
         traceback.print_exc()
